@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import { motion } from "framer-motion";
 import { Link, useLocation } from "react-router-dom";
 import UserMenu from "./UserMenu";
+import { ChartBarIcon, GiftIcon } from "@heroicons/react/24/outline";
+import { NavLink } from "react-router-dom";
 
 const MenuItem = ({ icon, text, path, isActive, onClick, isCollapsed }) => {
   return (
@@ -30,7 +32,7 @@ const MarketplaceLayout = ({ children }) => {
     { icon: "📦", text: "List Product", path: "/marketplace/list-product" },
     { icon: "💰", text: "My Listings", path: "/marketplace/my-listings" },
     { icon: "🛒", text: "My Purchases", path: "/marketplace/my-purchases" },
-    { icon: "📊", text: "Impact Dashboard", path: "/marketplace/impact" },
+    { icon: "🌳", text: "Leaderboard", path: "/marketplace/leaderboard" }
   ];
 
   const toggleSidebar = () => {
@@ -117,6 +119,32 @@ const MarketplaceLayout = ({ children }) => {
               isCollapsed={isSidebarCollapsed}
             />
           ))}
+          <NavLink
+            to="/marketplace/impact"
+            className={({ isActive }) =>
+              `flex items-center px-4 py-2 text-sm rounded-lg ${
+                isActive
+                  ? 'bg-emerald-600 text-white'
+                  : 'text-gray-300 hover:bg-slate-700'
+              }`
+            }
+          >
+            <ChartBarIcon className="w-5 h-5 mr-3" />
+            Impact Dashboard
+          </NavLink>
+          <NavLink
+            to="/marketplace/rewards"
+            className={({ isActive }) =>
+              `flex items-center px-4 py-2 text-sm rounded-lg ${
+                isActive
+                  ? 'bg-emerald-600 text-white'
+                  : 'text-gray-300 hover:bg-slate-700'
+              }`
+            }
+          >
+            <GiftIcon className="w-5 h-5 mr-3" />
+            Rewards & Achievements
+          </NavLink>
         </nav>
 
         {/* User Profile Section */}

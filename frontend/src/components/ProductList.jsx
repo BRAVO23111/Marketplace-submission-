@@ -90,22 +90,23 @@ const ProductList = () => {
 
             await new Promise(resolve => setTimeout(resolve, 5000));
 
-            const verifyResponse = await fetch(`http://localhost:3000/api/items/${tokenId}/execute-buy`, {
+            const verifyResponse = await fetch(`http://localhost:3000/api/items/execute-buy`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    transactionHash: txHash,
-                    productId: purchaseDetails.productId,
-                    quantity: 1
+                    tokenId: tokenId,
+                    buyer: buyerAddress,
+                    transactionHash: txHash
                 })
             });
 
             const result = await verifyResponse.json();
-            if (result.message && result.message.includes('failed')) {
-                throw new Error(result.message);
+            if (!result.success) {
+                throw new Error(result.message || 'Transaction verification failed');
             }
 
-            alert('Purchase successful!');
+            // Show success message with rewards
+            alert(`Purchase successful! You earned ${result.rewards.coins} coins${result.rewards.trees > 0 ? ` and ${result.rewards.trees} trees` : ''}!`);
             fetchProducts();
 
         } catch (err) {

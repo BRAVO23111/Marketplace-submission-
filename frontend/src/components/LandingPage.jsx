@@ -82,7 +82,7 @@ const LampContainer = ({ children, className }) => {
                 <div className="absolute inset-auto z-40 h-44 w-full -translate-y-[12.5rem] bg-slate-950"></div>
             </div>
 
-            <div className="relative z-50 flex -translate-y-80 flex-col items-center px-5 w-full max-w-7xl mx-auto">
+            <div className="absolute inset-0 z-50 flex flex-col items-center justify-center px-5 w-full max-w-7xl mx-auto">
                 {children}
             </div>
         </div>
@@ -98,7 +98,7 @@ const LandingPage = () => {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.5 }}
-                    className="text-center relative z-50 w-full max-w-4xl mx-auto"
+                    className="text-center relative z-50 w-full max-w-4xl mx-auto mt-9" 
                 >
                     <div className="flex flex-col items-center justify-center mb-8">
                         <div className="flex items-center justify-center space-x-4 mb-6">

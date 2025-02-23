@@ -11,12 +11,14 @@ import ProductDetails from './components/ProductDetails';
 import ListProductForm from './components/ListProductForm';
 import MyListings from './components/MyListings';
 import MyPurchases from './components/MyPurchases';
+import RewardsPanel from './components/RewardsPanel';
 import Login from './components/Login';
 import Signup from './components/Signup';
 import LandingPage from './components/LandingPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import MarketplaceLayout from './components/MarketplaceLayout';
 import ImpactDashboard from './components/ImpactDashboard';
+import Leaderboard from './components/Leaderboard';
 import { initializeAuth as firebaseInitializeAuth } from './firebase/auth';
 
 const AppContent = () => {
@@ -97,11 +99,31 @@ const AppContent = () => {
                     }
                 />
                 <Route
+                    path="/marketplace/leaderboard"
+                    element={
+                        <ProtectedRoute>
+                            <MarketplaceLayout>
+                                <Leaderboard />
+                            </MarketplaceLayout>
+                        </ProtectedRoute>
+                    }
+                />
+                <Route
                     path="/marketplace/impact"
                     element={
                         <ProtectedRoute>
                             <MarketplaceLayout>
                                 <ImpactDashboard />
+                            </MarketplaceLayout>
+                        </ProtectedRoute>
+                    }
+                />
+                <Route
+                    path="/marketplace/rewards"
+                    element={
+                        <ProtectedRoute>
+                            <MarketplaceLayout>
+                                <RewardsPanel />
                             </MarketplaceLayout>
                         </ProtectedRoute>
                     }

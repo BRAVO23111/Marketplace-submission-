@@ -31,6 +31,7 @@ app.use((req, res, next) => {
 app.use('/api/items', itemRoutes);
 app.use('/api/industry', industryRoutes);
 
+
 // Error handling middleware
 app.use((err, req, res, next) => {
     console.error('Error:', err);
