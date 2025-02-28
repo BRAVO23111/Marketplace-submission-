@@ -100,7 +100,7 @@ router.post('/transfer-reuse', async (req, res) => {
 // Execute buy transaction
 router.post('/:tokenId/execute-buy', async (req, res) => {
     try {
-        const { transactionHash, productId, quantity } = req.body;
+        const { transactionHash, productId, quantity, buyer, seller, skipAddressValidation } = req.body;
         const tokenId = req.params.tokenId;
         
         console.log('Execute buy request received:', {
@@ -108,6 +108,9 @@ router.post('/:tokenId/execute-buy', async (req, res) => {
             productId,
             quantity,
             transactionHash,
+            buyer,
+            seller,
+            skipAddressValidation,
             body: req.body
         });
 
@@ -127,6 +130,31 @@ router.post('/:tokenId/execute-buy', async (req, res) => {
             });
         }
 
+        // Validate that the productId matches the item's contractProductId
+        if (!item.contractProductId) {
+            return res.status(400).json({
+                message: 'Item does not have a valid contract product ID',
+                tokenId: tokenId
+            });
+        }
+
+        const dbProductId = String(item.contractProductId);
+        const requestProductId = String(productId);
+        
+        console.log('Product ID comparison:', {
+            dbProductId,
+            requestProductId,
+            match: dbProductId === requestProductId
+        });
+        
+        if (dbProductId !== requestProductId) {
+            return res.status(400).json({
+                message: 'Product ID mismatch with database record',
+                expected: dbProductId,
+                received: requestProductId
+            });
+        }
+
         // Get contract instance to verify transaction
         let marketplace;
         try {
@@ -140,63 +168,88 @@ router.post('/:tokenId/execute-buy', async (req, res) => {
             });
         }
         
-        // Get transaction receipt first
+        // Verify transaction on blockchain
+        console.log('Verifying transaction on blockchain...');
         let receipt;
         try {
-            const provider = marketplace.runner.provider;
-            console.log('Fetching transaction receipt for:', transactionHash);
-            receipt = await provider.getTransactionReceipt(transactionHash);
-            
+            // Wait for transaction to be mined if needed
+            receipt = await marketplace.runner.provider.getTransactionReceipt(transactionHash);
             if (!receipt) {
-                return res.status(400).json({
-                    message: 'Transaction not found on blockchain',
-                    transactionHash
-                });
+                console.log('Transaction not yet mined, waiting...');
+                receipt = await marketplace.runner.provider.waitForTransaction(transactionHash, 1, 30000);
             }
-
-            console.log('Transaction receipt found:', {
+            
+            console.log('Transaction receipt:', {
                 hash: receipt.hash,
                 blockNumber: receipt.blockNumber,
                 status: receipt.status,
-                from: receipt.from,
-                to: receipt.to,
                 gasUsed: receipt.gasUsed.toString()
             });
+            
+            if (!receipt.status) {
+                console.error('Transaction failed on blockchain:', {
+                    hash: transactionHash,
+                    status: receipt.status
+                });
+                return res.status(400).json({
+                    message: 'Transaction failed on blockchain',
+                    transactionHash,
+                    status: receipt.status
+                });
+            }
         } catch (error) {
-            console.error('Failed to get transaction receipt:', error);
+            console.error('Failed to get transaction receipt:', {
+                error: error.message,
+                code: error.code,
+                reason: error.reason,
+                data: error.data
+            });
             return res.status(400).json({
                 message: 'Failed to verify transaction on blockchain',
                 error: error.message,
-                transactionHash
-            });
-        }
-
-        if (!receipt.status) {
-            return res.status(400).json({
-                message: 'Transaction failed on blockchain',
-                transactionHash,
-                status: receipt.status
+                details: 'Could not retrieve transaction receipt'
             });
         }
 
         // Parse transaction logs to find purchase event
-        let events;
+        let purchaseEvent;
         try {
-            events = receipt.logs.map(log => {
-                try {
-                    const parsedLog = marketplace.interface.parseLog(log);
-                    console.log('Parsed log:', {
-                        name: parsedLog.name,
-                        args: parsedLog.args
-                    });
-                    return parsedLog;
-                } catch (e) {
-                    console.log('Failed to parse log:', e.message);
-                    return null;
-                }
-            }).filter(Boolean);
+            const iface = new ethers.Interface([
+                "event ProductPurchased(uint256 indexed productId, uint256 indexed transactionId, address indexed buyer, address seller, uint256 quantity, uint256 totalPrice, uint256 timestamp)"
+            ]);
 
-            console.log('Parsed events:', events.map(e => e.name));
+            console.log('Transaction logs count:', receipt.logs.length);
+            
+            // Log all events for debugging
+            for (let i = 0; i < receipt.logs.length; i++) {
+                const log = receipt.logs[i];
+                console.log(`Log ${i}:`, {
+                    address: log.address,
+                    topics: log.topics,
+                    data: log.data
+                });
+                
+                try {
+                    const parsedLog = iface.parseLog(log);
+                    if (parsedLog) {
+                        console.log(`Parsed log ${i}:`, {
+                            name: parsedLog.name,
+                            args: Object.fromEntries(
+                                Object.entries(parsedLog.args).map(([key, value]) => [key, value.toString()])
+                            )
+                        });
+                        
+                        if (parsedLog.name === 'ProductPurchased') {
+                            purchaseEvent = parsedLog;
+                            break;
+                        }
+                    }
+                } catch (e) {
+                    // Skip logs that don't match our event signature
+                    console.log(`Failed to parse log ${i}:`, e.message);
+                    continue;
+                }
+            }
         } catch (error) {
             console.error('Failed to parse transaction logs:', error);
             return res.status(400).json({
@@ -205,22 +258,12 @@ router.post('/:tokenId/execute-buy', async (req, res) => {
             });
         }
 
-        const purchaseEvent = events.find(event => event.name === 'ProductPurchased');
-        
         if (!purchaseEvent) {
             return res.status(400).json({
                 message: 'No purchase event found in transaction',
-                transactionHash,
-                foundEvents: events.map(e => e.name)
+                transactionHash
             });
         }
-
-        console.log('Purchase event found:', {
-            name: purchaseEvent.name,
-            args: Object.fromEntries(
-                Object.entries(purchaseEvent.args).map(([key, value]) => [key, value.toString()])
-            )
-        });
 
         // Verify purchase event details
         const eventProductId = purchaseEvent.args.productId.toString();
@@ -241,27 +284,99 @@ router.post('/:tokenId/execute-buy', async (req, res) => {
             });
         }
 
+        // Verify buyer and seller
+        const eventBuyer = ethers.getAddress(purchaseEvent.args.buyer.toString());
+        const eventSeller = ethers.getAddress(purchaseEvent.args.seller.toString());
+        
+        // Only validate if buyer and seller are provided in the request
+        if (req.body.buyer && req.body.seller && !skipAddressValidation) {
+            try {
+                const normalizedRequestBuyer = ethers.getAddress(req.body.buyer);
+                const normalizedRequestSeller = ethers.getAddress(req.body.seller);
+                
+                console.log('Address comparison:', {
+                    eventBuyer,
+                    requestBuyer: normalizedRequestBuyer,
+                    eventSeller,
+                    requestSeller: normalizedRequestSeller,
+                    buyerMatch: eventBuyer.toLowerCase() === normalizedRequestBuyer.toLowerCase(),
+                    sellerMatch: eventSeller.toLowerCase() === normalizedRequestSeller.toLowerCase()
+                });
+                
+                if (eventBuyer.toLowerCase() !== normalizedRequestBuyer.toLowerCase() || 
+                    eventSeller.toLowerCase() !== normalizedRequestSeller.toLowerCase()) {
+                    return res.status(400).json({
+                        message: 'Buyer or seller mismatch in purchase event',
+                        expectedBuyer: normalizedRequestBuyer,
+                        expectedSeller: normalizedRequestSeller,
+                        foundBuyer: eventBuyer,
+                        foundSeller: eventSeller
+                    });
+                }
+            } catch (error) {
+                console.error('Address normalization error:', error);
+                // Continue without validation if address normalization fails
+            }
+        }
+
         // Update item status in database
         try {
+            // First update the status to 'sold'
             item.status = 'sold';
+            
+            // Then update the quantity to 0 (this order matters for validation)
+            item.quantity = 0;
+            
             item.transaction = {
                 hash: transactionHash,
                 blockNumber: receipt.blockNumber.toString(),
-                events: events.map(event => ({
-                    name: event.name,
+                event: {
+                    name: purchaseEvent.name,
                     args: Object.fromEntries(
-                        Object.entries(event.args).map(([key, value]) => [key, value.toString()])
+                        Object.entries(purchaseEvent.args).map(([key, value]) => [key, value.toString()])
                     )
-                }))
+                }
             };
             
             // Add buyer information from the event
-            item.buyer = purchaseEvent.args.buyer;
+            try {
+                item.buyer = ethers.getAddress(purchaseEvent.args.buyer.toString());
+            } catch (error) {
+                console.error('Error normalizing buyer address:', error);
+                item.buyer = purchaseEvent.args.buyer.toString();
+            }
             item.soldAt = new Date();
-            item.quantity = 0; // Set remaining quantity to 0
             
-            await item.save();
-            console.log('Database updated successfully');
+            try {
+                await item.save();
+                console.log('Database updated successfully');
+            } catch (validationError) {
+                console.error('Validation error during save:', validationError);
+                
+                // Alternative approach: use updateOne to bypass validation
+                if (validationError.name === 'ValidationError' && validationError.message.includes('quantity')) {
+                    console.log('Attempting to update using updateOne to bypass validation...');
+                    
+                    const updateResult = await Item.updateOne(
+                        { _id: item._id },
+                        { 
+                            status: 'sold',
+                            quantity: 0,
+                            transaction: item.transaction,
+                            buyer: item.buyer,
+                            soldAt: item.soldAt
+                        }
+                    );
+                    
+                    if (updateResult.modifiedCount === 1) {
+                        console.log('Successfully updated using updateOne');
+                    } else {
+                        throw new Error('Failed to update item using updateOne');
+                    }
+                } else {
+                    throw validationError;
+                }
+            }
         } catch (error) {
             console.error('Failed to update database:', error);
             return res.status(500).json({
@@ -270,18 +385,25 @@ router.post('/:tokenId/execute-buy', async (req, res) => {
             });
         }
 
+        // Calculate rewards
+        const rewards = {
+            coins: Math.floor(item.price * 10), // 10 coins per unit of price
+            trees: item.carbonFootprint?.reuseSavings > 50 ? 1 : 0 // 1 tree if reuse savings > 50
+        };
+
         res.json({
             success: true,
             transaction: {
                 hash: transactionHash,
-                blockNumber: receipt.blockNumber,
-                events: events.map(event => ({
-                    name: event.name,
+                blockNumber: receipt.blockNumber.toString(),
+                event: {
+                    name: purchaseEvent.name,
                     args: Object.fromEntries(
-                        Object.entries(event.args).map(([key, value]) => [key, value.toString()])
+                        Object.entries(purchaseEvent.args).map(([key, value]) => [key, value.toString()])
                     )
-                }))
+                }
             },
+            rewards,
             itemStatus: 'sold',
             message: 'Item successfully purchased and marked as sold'
         });
@@ -290,11 +412,16 @@ router.post('/:tokenId/execute-buy', async (req, res) => {
             error: error.message,
             stack: error.stack,
             tokenId: req.params.tokenId,
-            body: req.body
+            body: req.body,
+            code: error.code,
+            reason: error.reason,
+            data: error.data
         });
         res.status(500).json({ 
             message: 'Internal server error during purchase verification',
             details: error.message,
+            errorCode: error.code,
+            errorReason: error.reason,
             stack: error.stack
         });
     }

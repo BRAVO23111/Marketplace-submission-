@@ -42,8 +42,14 @@ const itemSchema = new mongoose.Schema({
         required: true
     },
     price: {
-        type: String,
-        required: true
+        type: Number,
+        required: true,
+        validate: {
+            validator: function(value) {
+                return value > 0;
+            },
+            message: 'Price must be a positive number'
+        }
     },
     seller: {
         type: String,
@@ -56,17 +62,28 @@ const itemSchema = new mongoose.Schema({
     },
     contractProductId: {
         type: String,
-        select: false
+        required: function() {
+            // Only required if the item is not in draft status
+            return this.status !== 'draft';
+        }
     },
     quantity: {
         type: Number,
         required: true,
-        min: 1
+        min: 0,
+        validate: {
+            validator: function(quantity) {
+                // If status is 'sold', quantity can be 0
+                // Otherwise, quantity must be at least 1
+                return this.status === 'sold' || quantity >= 1;
+            },
+            message: 'Quantity must be at least 1 for items that are not sold'
+        }
     },
     status: {
         type: String,
-        enum: ['listed', 'sold', 'cancelled'],
-        default: 'listed'
+        enum: ['listed', 'sold', 'cancelled', 'draft'],
+        default: 'draft'
     },
     carbonFootprint: {
         newProductEmission: {
@@ -85,12 +102,11 @@ const itemSchema = new mongoose.Schema({
         }
     },
     transaction: {
-        hash: String,
-        blockNumber: String,
-        events: [{
-            name: String,
-            args: [mongoose.Schema.Types.Mixed]
-        }]
+        type: mongoose.Schema.Types.Mixed,
+        required: function() {
+            // Only required if the item is not in draft status
+            return this.status !== 'draft';
+        }
     },
     buyer: {
         type: String,
@@ -152,12 +168,16 @@ itemSchema.pre(/^find/, function() {
 
 // Add a pre-save hook to validate contractProductId and transaction
 itemSchema.pre('save', function(next) {
-    if (!this.contractProductId) {
-        return next(new Error('contractProductId is required'));
+    // Only validate contractProductId for non-draft items
+    if (!this.contractProductId && this.status !== 'draft') {
+        return next(new Error('contractProductId is required for non-draft items'));
     }
-    if (!this.transaction || !this.transaction.hash) {
-        return next(new Error('transaction details are required'));
+    
+    // Only validate transaction for items that should have been processed on the blockchain
+    if (this.status !== 'draft' && (!this.transaction || !this.transaction.hash)) {
+        return next(new Error('transaction details are required for non-draft items'));
     }
+    
     next();
 });
 

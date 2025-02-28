@@ -30,9 +30,27 @@ const ProductList = () => {
     };
 
     const getImpactLevel = (reuseSavings) => {
-        if (reuseSavings > 15) return { icon: '🌱', text: 'High Impact', color: 'text-green-600', bgColor: 'bg-green-50' };
-        if (reuseSavings > 5) return { icon: '🌿', text: 'Medium Impact', color: 'text-green-500', bgColor: 'bg-green-50' };
-        return { icon: '🍃', text: 'Low Impact', color: 'text-gray-500', bgColor: 'bg-gray-50' };
+        if (reuseSavings > 15) return { 
+            icon: '🌱', 
+            text: 'High Impact', 
+            color: 'text-emerald-500',
+            bgColor: 'bg-emerald-900/10',
+            borderColor: 'border-emerald-500'
+        };
+        if (reuseSavings > 5) return { 
+            icon: '🌿', 
+            text: 'Medium Impact', 
+            color: 'text-emerald-400',
+            bgColor: 'bg-emerald-900/5',
+            borderColor: 'border-emerald-400'
+        };
+        return { 
+            icon: '🍃', 
+            text: 'Low Impact', 
+            color: 'text-emerald-300',
+            bgColor: 'bg-emerald-900/5',
+            borderColor: 'border-emerald-300'
+        };
     };
 
     const handlePurchase = async (tokenId) => {
@@ -130,21 +148,21 @@ const ProductList = () => {
     }
 
     return (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             {/* Impact Summary */}
             <div className="mb-12">
-                <div className="bg-gradient-to-r from-green-50 via-emerald-50 to-teal-50 rounded-2xl p-8 shadow-lg">
+                <div className="bg-white/5 backdrop-blur-xl rounded-2xl p-6 border border-white/10">
                     <div className="flex items-center justify-between">
-                        <div>
-                            <h2 className="text-3xl font-bold text-gray-800 mb-2">Community Impact</h2>
-                            <p className="text-gray-600 text-lg">Together, we're making a difference</p>
-                        </div>
-                        <div className="text-right">
-                            <div className="flex items-center gap-3">
-                                <span className="text-5xl">🌍</span>
-                                <div>
-                                    <p className="text-4xl font-bold text-green-600">{totalCO2Saved.toFixed(1)}</p>
-                                    <p className="text-lg text-gray-600">kg CO₂ saved</p>
+                        <div className="flex items-center gap-6">
+                            <div className="w-16 h-16 bg-emerald-500/10 rounded-full flex items-center justify-center">
+                                <span className="text-3xl">🌍</span>
+                            </div>
+                            <div>
+                                <h2 className="text-2xl font-bold text-white">Total Community Contribution</h2>
+                                <div className="mt-2 flex items-baseline gap-2">
+                                    <span className="text-3xl font-bold text-emerald-400">{totalCO2Saved.toFixed(1)}</span>
+                                    <span className="text-lg text-emerald-400/80">kg CO₂</span>
+                                    <span className="text-gray-400 ml-1">emissions prevented</span>
                                 </div>
                             </div>
                         </div>
@@ -158,17 +176,18 @@ const ProductList = () => {
                     const impact = getImpactLevel(product.carbonFootprint?.reuseSavings || 0);
                     return (
                         <div key={product.tokenId} 
-                            className="bg-white rounded-2xl overflow-hidden shadow-lg hover:shadow-2xl transition-all duration-300 border border-gray-100 cursor-pointer"
+                            className="group bg-slate-900 rounded-2xl overflow-hidden transition-all duration-300 border border-emerald-500/20 hover:border-emerald-500/40 cursor-pointer relative"
                             onClick={() => handleProductClick(product.tokenId)}
                         >
                             {product.image && (
-                                <div className="relative h-64">
+                                <div className="relative h-64 overflow-hidden">
+                                    <div className="absolute inset-0 bg-emerald-900/20 group-hover:bg-emerald-900/10 transition-all duration-300 z-10" />
                                     <img 
                                         src={product.image} 
                                         alt={product.name} 
-                                        className="w-full h-full object-cover"
+                                        className="w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-500"
                                     />
-                                    <div className={`absolute top-4 right-4 ${impact.bgColor} px-4 py-2 rounded-full flex items-center gap-2 shadow-md`}>
+                                    <div className={`absolute top-4 right-4 ${impact.bgColor} px-4 py-2 rounded-full flex items-center gap-2 border ${impact.borderColor} z-20`}>
                                         <span className="text-xl">{impact.icon}</span>
                                         <span className={`${impact.color} font-semibold`}>{impact.text}</span>
                                     </div>
@@ -177,28 +196,28 @@ const ProductList = () => {
                             
                             <div className="p-6">
                                 <div className="mb-6">
-                                    <h2 className="text-2xl font-bold text-gray-800 mb-2">{product.name}</h2>
-                                    <p className="text-gray-600 line-clamp-2">{product.description}</p>
+                                    <h2 className="text-2xl font-bold text-white mb-2 group-hover:text-emerald-400 transition-colors">{product.name}</h2>
+                                    <p className="text-slate-400 line-clamp-2">{product.description}</p>
                                 </div>
 
-                                <div className="bg-gray-50 rounded-xl p-4 mb-6">
-                                    <h3 className="text-lg font-semibold text-gray-800 mb-3">Environmental Impact</h3>
+                                <div className="bg-slate-800/50 rounded-xl p-4 mb-6 border border-emerald-500/10">
+                                    <h3 className="text-lg font-semibold text-emerald-400 mb-3">Environmental Impact</h3>
                                     <div className="space-y-3">
                                         <div className="flex justify-between items-center">
-                                            <span className="text-gray-600">New Product CO₂</span>
-                                            <span className="font-medium text-red-500">
+                                            <span className="text-slate-400">New Product CO₂</span>
+                                            <span className="font-medium text-red-400">
                                                 +{product.carbonFootprint?.newProductEmission.toFixed(1)} kg
                                             </span>
                                         </div>
                                         <div className="flex justify-between items-center">
-                                            <span className="text-gray-600">CO₂ Savings</span>
-                                            <span className="font-medium text-green-500">
+                                            <span className="text-slate-400">CO₂ Savings</span>
+                                            <span className="font-medium text-emerald-400">
                                                 -{product.carbonFootprint?.reuseSavings.toFixed(1)} kg
                                             </span>
                                         </div>
-                                        <div className="pt-2 border-t border-gray-200">
+                                        <div className="pt-2 border-t border-slate-700">
                                             <div className="flex justify-between items-center">
-                                                <span className="font-semibold text-gray-700">Net Impact</span>
+                                                <span className="font-semibold text-white">Net Impact</span>
                                                 <span className={`font-bold ${(product.carbonFootprint?.netImpact || 0) <= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                                     {product.carbonFootprint?.netImpact.toFixed(1)} kg
                                                 </span>

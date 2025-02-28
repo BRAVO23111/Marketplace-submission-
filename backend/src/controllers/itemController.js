@@ -22,8 +22,7 @@ export const getItems = async (req, res) => {
 // Get a single item
 export const getItem = async (req, res) => {
     try {
-        const item = await Item.findOne({ tokenId: req.params.tokenId })
-            .select('+contractProductId +transaction'); // Explicitly include contractProductId and transaction
+        const item = await Item.findOne({ tokenId: req.params.tokenId });
 
         if (!item) {
             return res.status(404).json({ message: 'Item not found' });
@@ -63,159 +62,175 @@ export const getItem = async (req, res) => {
 
 // Create a new item
 export const createItem = async (req, res) => {
+    let savedDraftItem = null;
+    
     try {
-        // Get the contract instance
-        const marketplace = await contractFunctions.getContract();
-        
-        // Get the signer's address and normalize it
-        const seller = ethers.getAddress(await marketplace.runner.getAddress());
-        
-        // Convert price to Wei
-        const priceInWei = ethers.parseEther(req.body.price.toString());
-        const quantity = parseInt(req.body.quantity) || 1;
-
-        console.log('Creating item with data:', {
-            ...req.body,
-            carbonFootprint: req.body.carbonFootprint
-        });
-
-        // Call the contract's listProduct function
-        const tx = await marketplace.listProduct(
-            req.body.name,
-            req.body.description,
-            priceInWei,
-            quantity
-        );
-
-        console.log('Transaction sent:', tx.hash);
-        
-        // Wait for transaction confirmation
-        const receipt = await tx.wait();
-        
-        // Parse the transaction logs to get the product ID
-        const productListedEvent = receipt.logs
-            .map(log => {
-                try {
-                    return marketplace.interface.parseLog(log);
-                } catch (e) {
-                    return null;
-                }
-            })
-            .filter(Boolean)
-            .find(event => event.name === 'ProductListed');
-
-        if (!productListedEvent) {
-            throw new Error('Failed to get product ID from blockchain event');
-        }
-
-        // Get the product ID from the event (first argument)
-        const contractProductId = productListedEvent.args[0].toString();
-
-        // Process the transaction receipt
-        const processedReceipt = {
-            hash: receipt.hash,
-            blockNumber: receipt.blockNumber.toString(),
-            events: receipt.logs.map(log => {
-                try {
-                    const parsedLog = marketplace.interface.parseLog(log);
-                    return {
-                        name: parsedLog.name,
-                        args: Array.from(parsedLog.args).map(arg => 
-                            typeof arg === 'bigint' ? arg.toString() : arg
-                        )
-                    };
-                } catch (e) {
-                    return null;
-                }
-            }).filter(Boolean)
-        };
-
-        console.log('Product creation successful:', {
-            transactionHash: receipt.hash,
-            contractProductId: contractProductId,
-            tokenId: req.body.tokenId,
-            eventArgs: productListedEvent.args
-        });
-
-        // Create the item in database with the contract product ID and transaction details
-        const itemData = {
+        // First, create a draft item in the database
+        const draftItem = new Item({
             tokenId: req.body.tokenId,
             name: req.body.name,
             description: req.body.description,
             price: req.body.price,
-            seller: seller,
+            seller: req.body.seller || "0x0000000000000000000000000000000000000000", // Placeholder until we get the actual seller
             image: req.body.image,
-            quantity: quantity,
-            contractProductId: contractProductId,
-            status: 'listed',
+            quantity: parseInt(req.body.quantity) || 1,
+            status: 'draft', // Start as draft
             carbonFootprint: {
                 newProductEmission: parseFloat(req.body.carbonFootprint?.newProductEmission) || 0,
                 reuseSavings: parseFloat(req.body.carbonFootprint?.reuseSavings) || 0
-            },
-            transaction: processedReceipt
-        };
+            }
+            // No transaction field for draft items
+        });
 
-        console.log('Creating item with data:', itemData);
+        // Save the draft item to get an _id
+        savedDraftItem = await draftItem.save();
+        console.log('Draft item created:', savedDraftItem._id);
 
         try {
-            const item = new Item(itemData);
+            // Get the contract instance
+            const marketplace = await contractFunctions.getContract();
             
-            // Validate the item before saving
-            const validationError = item.validateSync();
-            if (validationError) {
-                console.error('Validation error:', validationError);
-                throw new Error(`Validation failed: ${JSON.stringify(validationError.errors)}`);
+            // Get the signer's address and normalize it
+            const seller = ethers.getAddress(await marketplace.runner.getAddress());
+            
+            // Convert price to Wei
+            const price = parseFloat(req.body.price);
+            if (isNaN(price) || price <= 0) {
+                throw new Error('Price must be a positive number');
+            }
+            const priceInWei = ethers.parseEther(price.toString());
+            const quantity = parseInt(req.body.quantity) || 1;
+
+            console.log('Creating item with data:', {
+                ...req.body,
+                carbonFootprint: req.body.carbonFootprint
+            });
+
+            // Call the contract's listProduct function
+            const tx = await marketplace.listProduct(
+                req.body.name,
+                req.body.description,
+                priceInWei,
+                quantity
+            );
+
+            console.log('Transaction sent:', tx.hash);
+            
+            // Wait for transaction confirmation
+            const receipt = await tx.wait();
+            
+            // Parse the transaction logs to get the product ID
+            const productListedEvent = receipt.logs
+                .map(log => {
+                    try {
+                        return marketplace.interface.parseLog(log);
+                    } catch (e) {
+                        return null;
+                    }
+                })
+                .filter(Boolean)
+                .find(event => event.name === 'ProductListed');
+
+            if (!productListedEvent) {
+                const error = new Error('Failed to get product ID from blockchain event');
+                error.savedDraftId = savedDraftItem._id;
+                throw error;
             }
 
-            // Save the item to database
-            const savedItem = await item.save();
+            // Get the product ID from the event (first argument)
+            const contractProductId = productListedEvent.args[0].toString();
+
+            // Process the transaction receipt
+            const processedReceipt = {
+                hash: receipt.hash,
+                blockNumber: receipt.blockNumber.toString(),
+                events: receipt.logs.map(log => {
+                    try {
+                        const parsedLog = marketplace.interface.parseLog(log);
+                        return {
+                            name: parsedLog.name,
+                            args: Array.from(parsedLog.args).map(arg => 
+                                typeof arg === 'bigint' ? arg.toString() : arg
+                            )
+                        };
+                    } catch (e) {
+                        return null;
+                    }
+                }).filter(Boolean)
+            };
+
+            console.log('Product creation successful:', {
+                transactionHash: receipt.hash,
+                contractProductId: contractProductId,
+                tokenId: req.body.tokenId,
+                eventArgs: productListedEvent.args
+            });
+
+            // Update the draft item with blockchain information
+            savedDraftItem.contractProductId = contractProductId;
+            savedDraftItem.seller = seller;
+            savedDraftItem.status = 'listed';
+            savedDraftItem.transaction = processedReceipt;
+
+            // Save the updated item
+            const finalItem = await savedDraftItem.save();
             
             // Log the saved item details
-            console.log('Item saved successfully:', {
-                _id: savedItem._id,
-                tokenId: savedItem.tokenId,
-                contractProductId: savedItem.contractProductId,
-                carbonFootprint: savedItem.carbonFootprint,
-                transactionHash: savedItem.transaction.hash
+            console.log('Item updated with blockchain data:', {
+                _id: finalItem._id,
+                tokenId: finalItem.tokenId,
+                contractProductId: finalItem.contractProductId,
+                carbonFootprint: finalItem.carbonFootprint,
+                transactionHash: finalItem.transaction.hash
             });
 
-            // Verify the saved item and its transaction details
-            const verifiedItem = await Item.findById(savedItem._id);
-            console.log('Verified saved item:', {
-                _id: verifiedItem._id,
-                tokenId: verifiedItem.tokenId,
-                contractProductId: verifiedItem.contractProductId,
-                carbonFootprint: verifiedItem.carbonFootprint,
-                transactionHash: verifiedItem.transaction.hash
-            });
-
-            // Verify that the contractProductId matches the one from the transaction
-            const savedProductId = verifiedItem.contractProductId;
-            const transactionProductId = productListedEvent.args[0].toString();
-            
-            if (savedProductId !== transactionProductId) {
-                throw new Error(`Product ID mismatch: saved=${savedProductId}, transaction=${transactionProductId}`);
-            }
-
-            // Send response
+            // Return the item data with the transaction details
             res.status(201).json({
-                item: savedItem,
-                transaction: processedReceipt
+                ...finalItem.toObject(),
+                transactionHash: receipt.hash,
+                blockNumber: receipt.blockNumber.toString()
             });
-        } catch (dbError) {
-            console.error('Database error:', {
-                message: dbError.message,
-                code: dbError.code,
-                name: dbError.name,
-                stack: dbError.stack
-            });
-            throw dbError;
+        } catch (blockchainError) {
+            // If blockchain transaction fails, attach the draft item ID to the error
+            blockchainError.savedDraftId = savedDraftItem._id;
+            throw blockchainError;
         }
     } catch (error) {
         console.error('Error in createItem:', error);
-        res.status(400).json({ 
-            message: error.message,
-            details: error.reason || 'Transaction failed'
+        
+        // Check if we have a draft item that needs to be cleaned up
+        if (error.savedDraftId) {
+            try {
+                await Item.findByIdAndDelete(error.savedDraftId);
+                console.log(`Cleaned up draft item ${error.savedDraftId} after error`);
+            } catch (cleanupError) {
+                console.error('Failed to clean up draft item:', cleanupError);
+            }
+        }
+        
+        // Determine the appropriate error message and status code
+        let statusCode = 400;
+        let errorMessage = error.message;
+        
+        if (error.code === 11000) {
+            // Duplicate key error
+            statusCode = 409;
+            errorMessage = 'An item with this ID already exists';
+        } else if (error.name === 'ValidationError') {
+            // Mongoose validation error
+            statusCode = 422;
+            errorMessage = Object.values(error.errors)
+                .map(e => e.message)
+                .join(', ');
+        } else if (error.message.includes('transaction')) {
+            // Blockchain transaction error
+            statusCode = 502;
+            errorMessage = 'Blockchain transaction failed: ' + error.message;
+        }
+        
+        res.status(statusCode).json({ 
+            error: errorMessage,
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
 };

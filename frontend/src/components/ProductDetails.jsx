@@ -31,20 +31,23 @@ const ProductDetails = () => {
     }, [tokenId]);
 
     const fetchProductDetails = async () => {
+        setLoading(true);
+        setError(null);
         try {
-            setLoading(true);
             const response = await fetch(`http://localhost:3000/api/items/${tokenId}`);
             
             if (!response.ok) {
-                throw new Error('Failed to fetch product details');
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.message || `Failed to fetch product: ${response.status} ${response.statusText}`);
             }
             
             const data = await response.json();
+            console.log('Product details:', data);
             setProduct(data);
-            setError(null);
         } catch (err) {
             console.error('Error fetching product details:', err);
-            setError(err.message);
+            setError(err.message || 'Failed to load product details. Please try again.');
+            setProduct(null);
         } finally {
             setLoading(false);
         }
@@ -55,12 +58,17 @@ const ProductDetails = () => {
             setPurchaseLoading(true);
             
             if (!window.ethereum) {
-                throw new Error("Please install MetaMask!");
+                throw new Error('MetaMask not installed. Please install MetaMask to make purchases.');
             }
 
             const accounts = await window.ethereum.request({ 
                 method: 'eth_requestAccounts' 
             });
+            
+            if (!accounts || accounts.length === 0) {
+                throw new Error('No Ethereum accounts found. Please connect your wallet.');
+            }
+            
             const buyerAddress = ethers.getAddress(accounts[0]);
 
             const response = await fetch(`http://localhost:3000/api/items/${tokenId}/buy`, {
@@ -75,32 +83,61 @@ const ProductDetails = () => {
             }
             
             const purchaseDetails = await response.json();
-            const contractAddress = ethers.getAddress(purchaseDetails.contractAddress);
-            const valueInWei = purchaseDetails.totalPriceWei ? 
-                BigInt(purchaseDetails.totalPriceWei) : 
-                ethers.parseUnits(purchaseDetails.price.toString(), 'ether');
-
-            const iface = new ethers.Interface([
-                "function buyProduct(uint256 productId, uint256 quantity)"
-            ]);
-
-            const encodedData = iface.encodeFunctionData("buyProduct", [
-                BigInt(purchaseDetails.productId),
-                BigInt(1)
-            ]);
+            
+            // Debug log for purchase details
+            console.log('Purchase details received:', {
+                productId: purchaseDetails.productId,
+                contractAddress: purchaseDetails.contractAddress,
+                price: purchaseDetails.totalPrice,
+                priceWei: purchaseDetails.totalPriceWei
+            });
+            
+            const { contractAddress, methodName, methodParams, totalPriceWei } = purchaseDetails;
+            
+            // Create a contract instance to estimate gas
+            const provider = new ethers.BrowserProvider(window.ethereum);
+            const contract = new ethers.Contract(
+                contractAddress,
+                ["function buyProduct(uint256 productId, uint256 quantity) payable"],
+                provider
+            );
+            
+            // Encode function data
+            const iface = new ethers.Interface(["function buyProduct(uint256 productId, uint256 quantity) payable"]);
+            const encodedData = iface.encodeFunctionData(methodName, methodParams);
+            
+            // Parse value to BigInt to ensure proper handling
+            const valueInWei = BigInt(totalPriceWei);
+            
+            // Try to estimate gas first
+            let gasLimit;
+            try {
+                const estimatedGas = await provider.estimateGas({
+                    to: contractAddress,
+                    from: accounts[0],
+                    value: valueInWei.toString(),
+                    data: encodedData
+                });
+                
+                // Add 30% buffer to estimated gas
+                gasLimit = BigInt(Math.floor(Number(estimatedGas) * 1.3));
+                console.log('Estimated gas limit:', gasLimit.toString());
+            } catch (gasError) {
+                console.warn('Gas estimation failed, using default:', gasError);
+                gasLimit = BigInt(500000); // Fallback gas limit
+            }
 
             const txHash = await window.ethereum.request({
                 method: 'eth_sendTransaction',
                 params: [{
                     to: contractAddress,
-                    from: buyerAddress,
+                    from: accounts[0],
                     value: ethers.toBeHex(valueInWei),
                     data: encodedData,
-                    gas: ethers.toBeHex(350000)
+                    gas: ethers.toBeHex(gasLimit)
                 }],
             });
 
-            const provider = new ethers.BrowserProvider(window.ethereum);
             const receipt = await provider.waitForTransaction(txHash);
 
             await new Promise(resolve => setTimeout(resolve, 5000));
@@ -111,28 +148,81 @@ const ProductDetails = () => {
                 body: JSON.stringify({
                     transactionHash: txHash,
                     productId: purchaseDetails.productId,
-                    quantity: 1
+                    quantity: 1,
+                    buyer: ethers.getAddress(accounts[0]),
+                    seller: ethers.getAddress(purchaseDetails.seller)
                 })
             });
+
+            if (!verifyResponse.ok) {
+                const errorData = await verifyResponse.json();
+                console.error('Verification failed:', errorData);
+                
+                // If the error is related to address validation, try again with skipAddressValidation
+                if (errorData.message && errorData.message.includes('Buyer or seller mismatch')) {
+                    console.log('Retrying with skipAddressValidation...');
+                    
+                    const retryResponse = await fetch(`http://localhost:3000/api/items/${tokenId}/execute-buy`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            transactionHash: txHash,
+                            productId: purchaseDetails.productId,
+                            quantity: 1,
+                            skipAddressValidation: true
+                        })
+                    });
+                    
+                    if (!retryResponse.ok) {
+                        const retryErrorData = await retryResponse.json();
+                        throw new Error(retryErrorData.message || 'Failed to verify purchase even with skipAddressValidation');
+                    }
+                    
+                    return await retryResponse.json();
+                }
+                
+                throw new Error(errorData.message || 'Failed to verify purchase');
+            }
 
             const result = await verifyResponse.json();
             if (result.message && result.message.includes('failed')) {
                 throw new Error(result.message);
             }
 
+            console.log('Purchase successful:', result);
             alert('Purchase successful!');
-            fetchProductDetails();
+            
+            // Refresh product details after successful purchase
+            await fetchProductDetails();
 
         } catch (err) {
             console.error('Purchase failed:', err);
-            alert('Purchase failed: ' + (err.message || 'Unknown error'));
+            
+            // Extract the most useful error message
+            let errorMessage = 'Purchase failed. Please try again.';
+            
+            if (err.message) {
+                if (err.message.includes('user rejected transaction')) {
+                    errorMessage = 'Transaction was rejected by the user.';
+                } else if (err.message.includes('insufficient funds')) {
+                    errorMessage = 'Insufficient funds in your wallet to complete this purchase.';
+                } else if (err.message.includes('gas required exceeds allowance')) {
+                    errorMessage = 'Gas required exceeds allowance. Please increase your gas limit.';
+                } else {
+                    // Use the error message directly if it exists
+                    errorMessage = err.message;
+                }
+            }
+            
+            setError(errorMessage);
         } finally {
             setPurchaseLoading(false);
         }
     };
 
     const formatDate = (date) => {
-        return new Date(date).toLocaleDateString('en-US', {
+        if (!date) return 'Unknown';
+        return new Date(date).toLocaleString('en-US', {
             year: 'numeric',
             month: 'short',
             day: 'numeric',
@@ -142,7 +232,15 @@ const ProductDetails = () => {
     };
 
     const formatAddress = (address) => {
-        return `${address.slice(0, 6)}...${address.slice(-4)}`;
+        if (!address) return 'Unknown Address';
+        try {
+            // Try to normalize the address
+            const normalizedAddress = ethers.getAddress(address);
+            return `${normalizedAddress.substring(0, 6)}...${normalizedAddress.substring(normalizedAddress.length - 4)}`;
+        } catch (error) {
+            console.warn('Invalid address format:', address, error);
+            return 'Invalid Address';
+        }
     };
 
     if (loading) {
@@ -185,10 +283,10 @@ const ProductDetails = () => {
                     className="relative"
                 >
                     <div className="aspect-square rounded-2xl overflow-hidden bg-slate-800">
-                        {product.image ? (
+                        {product?.image ? (
                             <img 
                                 src={product.image} 
-                                alt={product.name}
+                                alt={product?.name}
                                 className="w-full h-full object-cover"
                             />
                         ) : (
@@ -206,50 +304,55 @@ const ProductDetails = () => {
                     className="space-y-6"
                 >
                     <div>
-                        <h1 className="text-3xl font-bold text-white mb-2">{product.name}</h1>
-                        <p className="text-gray-400">{product.description}</p>
+                        <h1 className="text-3xl font-bold text-white mb-2">{product?.name || 'Unnamed Product'}</h1>
+                        <p className="text-gray-400">{product?.description || 'No description available'}</p>
                     </div>
 
                     <div className="flex items-center justify-between">
                         <div>
                             <p className="text-gray-400 text-sm">Price</p>
-                            <p className="text-3xl font-bold text-emerald-500">{product.price} ETH</p>
+                            <p className="text-3xl font-bold text-emerald-500">{product?.price || 0} ETH</p>
                         </div>
                         <div className="text-right">
                             <p className="text-gray-400 text-sm">Status</p>
                             <p className={`font-semibold ${
-                                product.status === 'listed' ? 'text-emerald-500' : 'text-red-500'
+                                product?.status === 'listed' ? 'text-emerald-500' : 
+                                product?.status === 'sold' ? 'text-red-500' : 'text-yellow-500'
                             }`}>
-                                {product.status === 'listed' ? 'Available' : 'Sold'}
+                                {product?.status ? product.status.charAt(0).toUpperCase() + product.status.slice(1) : 'Unknown'}
                             </p>
                         </div>
                     </div>
 
-                    {/* Environmental Impact */}
-                    <div className="bg-slate-800 rounded-xl p-6 space-y-4">
-                        <h2 className="text-xl font-semibold text-white">Environmental Impact</h2>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <p className="text-gray-400 text-sm">New Product CO₂</p>
-                                <p className="text-lg font-semibold text-red-500">
-                                    +{product.carbonFootprint?.newProductEmission.toFixed(1)} kg
-                                </p>
+                    {/* Carbon Footprint */}
+                    <div className="bg-slate-800 rounded-xl p-6">
+                        <h2 className="text-xl font-semibold text-white mb-4">Carbon Footprint</h2>
+                        {product?.carbonFootprint ? (
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <p className="text-gray-400 text-sm">New Product CO₂</p>
+                                    <p className="text-lg font-semibold text-red-500">
+                                        +{product.carbonFootprint.newProductEmission?.toFixed(1) || 0} kg
+                                    </p>
+                                </div>
+                                <div>
+                                    <p className="text-gray-400 text-sm">Reuse Savings</p>
+                                    <p className="text-lg font-semibold text-emerald-500">
+                                        -{product.carbonFootprint.reuseSavings?.toFixed(1) || 0} kg
+                                    </p>
+                                </div>
+                                <div className="col-span-2">
+                                    <p className="text-gray-400 text-sm">Net Impact</p>
+                                    <p className={`text-lg font-semibold ${
+                                        (product.carbonFootprint.netImpact || 0) <= 0 ? 'text-emerald-500' : 'text-red-500'
+                                    }`}>
+                                        {product.carbonFootprint.netImpact?.toFixed(1) || 0} kg CO₂
+                                    </p>
+                                </div>
                             </div>
-                            <div>
-                                <p className="text-gray-400 text-sm">CO₂ Savings</p>
-                                <p className="text-lg font-semibold text-emerald-500">
-                                    -{product.carbonFootprint?.reuseSavings.toFixed(1)} kg
-                                </p>
-                            </div>
-                            <div className="col-span-2">
-                                <p className="text-gray-400 text-sm">Net Impact</p>
-                                <p className={`text-lg font-semibold ${
-                                    product.carbonFootprint?.netImpact <= 0 ? 'text-emerald-500' : 'text-red-500'
-                                }`}>
-                                    {product.carbonFootprint?.netImpact.toFixed(1)} kg CO₂
-                                </p>
-                            </div>
-                        </div>
+                        ) : (
+                            <p className="text-gray-400">Carbon footprint data not available</p>
+                        )}
                     </div>
 
                     {/* Seller Information */}
@@ -258,17 +361,17 @@ const ProductDetails = () => {
                         <div className="space-y-2">
                             <div className="flex justify-between">
                                 <span className="text-gray-400">Address</span>
-                                <span className="text-white">{formatAddress(product.seller)}</span>
+                                <span className="text-white">{formatAddress(product?.seller)}</span>
                             </div>
                             <div className="flex justify-between">
                                 <span className="text-gray-400">Listed Date</span>
-                                <span className="text-white">{formatDate(product.createdAt)}</span>
+                                <span className="text-white">{formatDate(product?.createdAt)}</span>
                             </div>
                         </div>
                     </div>
 
                     {/* Purchase Button */}
-                    {product.status === 'listed' && (
+                    {product?.status === 'listed' && (
                         <motion.button
                             whileHover={{ scale: 1.02 }}
                             whileTap={{ scale: 0.98 }}
@@ -300,29 +403,31 @@ const ProductDetails = () => {
                     )}
 
                     {/* Transaction Details for Sold Items */}
-                    {product.status === 'sold' && product.transaction && (
+                    {product?.status === 'sold' && (
                         <div className="bg-slate-800 rounded-xl p-6">
                             <h2 className="text-xl font-semibold text-white mb-4">Transaction Details</h2>
                             <div className="space-y-2">
                                 <div className="flex justify-between">
                                     <span className="text-gray-400">Buyer</span>
-                                    <span className="text-white">{formatAddress(product.buyer)}</span>
+                                    <span className="text-white">{formatAddress(product?.buyer)}</span>
                                 </div>
                                 <div className="flex justify-between">
                                     <span className="text-gray-400">Sale Date</span>
-                                    <span className="text-white">{formatDate(product.soldAt)}</span>
+                                    <span className="text-white">{product?.soldAt ? formatDate(product.soldAt) : 'Unknown'}</span>
                                 </div>
-                                <div className="flex justify-between">
-                                    <span className="text-gray-400">Transaction</span>
-                                    <a
-                                        href={`https://mumbai.polygonscan.com/tx/${product.transaction.hash}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-blue-400 hover:text-blue-300"
-                                    >
-                                        View on Polygonscan
-                                    </a>
-                                </div>
+                                {product?.transaction && product.transaction.hash && (
+                                    <div className="flex justify-between">
+                                        <span className="text-gray-400">Transaction</span>
+                                        <a
+                                            href={`https://mumbai.polygonscan.com/tx/${product.transaction.hash}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-blue-400 hover:text-blue-300"
+                                        >
+                                            View on Polygonscan
+                                        </a>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}

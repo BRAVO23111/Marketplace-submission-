@@ -69,6 +69,14 @@ const ListProductForm = () => {
             debouncedCalculateEmissions(value);
         }
 
+        if (name === 'price') {
+            // Ensure price is always positive
+            const numValue = parseFloat(value);
+            if (numValue < 0) {
+                return; // Don't update state for negative values
+            }
+        }
+
         if (name.startsWith('carbon_')) {
             // Handle carbon footprint fields
             const field = name.replace('carbon_', '');
@@ -102,20 +110,38 @@ const ListProductForm = () => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        
+        // Validate price
+        const price = parseFloat(formData.price);
+        if (isNaN(price) || price <= 0) {
+            alert('Price must be a positive number');
+            return;
+        }
+        
         setLoading(true);
 
         try {
             const response = await fetch('http://localhost:3000/api/items', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(formData)
+                body: JSON.stringify({
+                    ...formData,
+                    price: price.toString() // Ensure price is properly formatted
+                })
             });
 
+            const responseData = await response.json();
+
             if (!response.ok) {
-                throw new Error('Failed to list product');
+                let errorMessage = 'Failed to list product';
+                
+                if (responseData.error) {
+                    errorMessage = responseData.error;
+                }
+                
+                throw new Error(errorMessage);
             }
 
-            await response.json();
             alert('Product listed successfully!');
             navigate('/');
         } catch (error) {
@@ -192,6 +218,7 @@ const ListProductForm = () => {
                                 <input
                                     type="number"
                                     step="0.000001"
+                                    min="0.000001"
                                     name="price"
                                     value={formData.price}
                                     onChange={handleChange}
